@@ -29,18 +29,18 @@ ERROR_t SPI_SendString(const u8_t *str, const u8_t length) {
 }
 
 ERROR_t SPI_ReceiveString(u8_t * const str, const u8_t length) {
-    ERROR_t errorStatus = ERROR_NO;
+    ERROR_t error = ERROR_NO;
 
     u8_t i = 0;
     while(i < length) {
-        errorStatus = SPI_ReceiveByte(&str[i]);
+        error = SPI_ReceiveByte(&str[i]);
         ++i;
         
-        if(errorStatus == ERROR_YES) {
+        if(error == ERROR_YES) {
             break;
         }
     }
 
-    return errorStatus;
+    return error;
 }
 

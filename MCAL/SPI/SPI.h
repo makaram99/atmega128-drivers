@@ -32,6 +32,14 @@ void SPI_Init(void);
 ERROR_t SPI_SendByte(const u8_t data);
 
 /*******************************************************************************
+ * @brief       Check if the Receive buffer received a byte (Slave mode)
+ * @param[out]  ptrState: Pointer to the return value
+ * @return      Error status: \ref ERROR_t
+ * @note        The function does not block
+ ******************************************************************************/
+ERROR_t SPI_Available(STATE_t * const ptrState);
+
+/*******************************************************************************
  * @brief       Receives a byte through the SPI module
  * @param[out]  The byte received from the SPI module
  * @return      Error status: \ref ERROR_t
@@ -41,6 +49,18 @@ ERROR_t SPI_SendByte(const u8_t data);
  *              sent and received from the SPI module.
  ******************************************************************************/
 ERROR_t SPI_ReceiveByte(u8_t * const data);
+
+/*******************************************************************************
+ * @brief       Reads the SPI Data Register without any communication
+ * @param[out]  data: poiter to the return value containing the value of the SPDR
+ * @return      Error status: \ref ERROR_t
+ * @note        The function does not block the CPU
+ * @note		This function can be used in Slave mode to read the received 
+ *				data from the master. In this case, you should call 
+ *				SPI_Available() before Reading the SPI Data Register to cheeck 
+ *				if the master has sent data or not.
+ ******************************************************************************/
+ERROR_t SPI_Read(u8_t * const data);
 
 /*******************************************************************************
  * @brief       Sends and receives a byte through the SPI module

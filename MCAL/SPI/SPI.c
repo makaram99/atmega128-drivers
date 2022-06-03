@@ -86,26 +86,46 @@ ERROR_t SPI_SendByte(const u8_t data) {
 
     SPDR = data;                        /* Write data to the SPI data register */
 
-    while(BIT_IS_CLEAR(SPSR, SPIF))
-        ;                               /* Wait until SPI transfer complete */
+    while(BIT_IS_CLEAR(SPSR, SPIF));    /* Wait until SPI transfer complete */
 
     /* Clear transmission complete flag by reading SPI Status register */
-    fBuffer = SPSR; /* Read SPI Status register */
-    fBuffer = SPDR; /* Then access SPI Data register */
+    fBuffer = SPSR; 					/* Read SPI Status register */
+    fBuffer = SPDR; 					/* Then access SPI Data register */
+
+    return error;
+}
+
+ERROR_t SPI_Available(STATE_t * const ptrState) {
+    ERROR_t error = ERROR_NO;
+	
+	*ptrState = BIT_IS_SET(SPSR, SPIF);
 
     return error;
 }
 
 ERROR_t SPI_ReceiveByte(u8_t * const data) {
-    ERROR_t errorStatus = ERROR_NO;
+    ERROR_t error = ERROR_NO;
+	u32_t u32Timeout = 10000000;
+	
+	/* Send garbage value	*/
+	SPDR = NULL_BYTE;		
 
-    while(BIT_IS_CLEAR(SPSR, SPIF))
-        ;                                           /* Wait for transmission complete   */
+	/* Wait for transmission complete   */
+    while(BIT_IS_CLEAR(SPSR, SPIF) && (--u32Timeout));               
     
-    *data = SPDR;                                  /* Read data from buffer */
-    /* Reading SPDR also clears the SPIF flag. So, no need to clear it again */
+	/* Read data from buffer, and clear the SPIF flag by accessing both SPSR, and SPDR registers	*/
+	fBuffer = SPSR; 					/* Read SPI Status register */
+    *data = SPDR;
+	
+    return error;
+}
 
-    return errorStatus;
+ERROR_t SPI_Read(u8_t * const data) {
+    ERROR_t error = ERROR_NO;
+	
+    *data = SPDR;
+	
+    return error;
 }
 
 void SPI_TrancieveByte(const u8_t dataToSend, u8_t * const dataReceived) {   
