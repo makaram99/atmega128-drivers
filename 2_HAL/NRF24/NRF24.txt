@@ -1,0 +1,471 @@
+#include "util/delay.h"
+#include "STD_TYPES.h"
+#include "BIT_MATH.h"
+#include "NRF24_reg.h"
+#include "DIO.h"
+#include "GIE.h"
+#include "SPI.h"
+#include "NRF24.h"
+#include "NRF24_cfg.h"
+
+void NRF24_CS_Select(){
+    DIO_SetPinValue(NRF24_cfg.pins.csn.pin, NRF24_cfg.pins.csn.port, LOW);
+}
+
+void NRF24_CS_Deselect(){
+    DIO_SetPinValue(NRF24_cfg.pins.csn.pin, NRF24_cfg.pins.csn.port, HIGH);
+}
+
+void NRF24_CE_Enable(){
+    DIO_SetPinValue(NRF24_cfg.pins.ce.pin, NRF24_cfg.pins.ce.port, HIGH);
+}
+
+void NRF24_CE_Enable(){
+    DIO_SetPinValue(NRF24_cfg.pins.ce.pin, NRF24_cfg.pins.ce.port, LOW);
+}
+
+/* Clocks only one byte into the given nrf24 register */
+void NRF24_WriteReg(u8_t reg, u8_t value){
+    NRF24_CS_Select();      /* Select nrf24 */
+
+    SPI_SendByte(W_REGISTER | (REGISTER_MASK & reg));
+    SPI_SendByte(value);
+
+    NRF24_CS_Deselect();    /* Deselect nrf24 */
+}
+
+/* Clock many bytes into the given nrf24 register */
+void NRF24_WriteRegMulti(u8_t reg, u8_t *value, u8_t len){
+    u8_t i = 0;
+
+    NRF24_CS_Select();      /* Select nrf24 */
+    SPI_SendByte(W_REGISTER | (REGISTER_MASK & reg));
+
+    for(i = 0; i < len; i++){
+        SPI_SendByte(value[i]);
+    }
+
+    NRF24_CS_Deselect();    /* Deselect nrf24 */
+}
+
+/* Reads only one byte from the given nrf24 register */
+u8_t NRF24_ReadReg(u8_t reg){
+    u8_t value = 0;
+
+    NRF24_CS_Select();      /* Select nrf24 */
+
+    SPI_SendByte(R_REGISTER | (REGISTER_MASK & reg));
+    SPI_ReceiveByte(&value);
+
+    NRF24_CS_Deselect();    /* Deselect nrf24 */
+
+    return value;
+}
+
+/* Reads Many bytes from the given nrf24 register */
+void NRF24_ReadRegMulti(u8_t reg, u8_t *data, u8_t len){
+    u8_t i = 0;
+    u8_t value = 0;
+
+    NRF24_CS_Select();      /* Select nrf24 */
+
+    SPI_SendByte(R_REGISTER | (REGISTER_MASK & reg));
+
+    for(i = 0; i < len; i++){
+        SPI_ReceiveByte(&value);
+        data[i] = value;
+    }
+
+    NRF24_CS_Deselect();    /* Deselect nrf24 */
+}
+
+void NRF24_FlushRX(){
+    NRF24_CS_Select();      /* Select nrf24 */
+
+    SPI_SendByte(FLUSH_RX);
+
+    NRF24_CS_Deselect();    /* Deselect nrf24 */
+}
+
+void NRF24_FlushTX(){
+    NRF24_CS_Select();      /* Select nrf24 */
+
+    SPI_SendByte(FLUSH_TX);
+
+    NRF24_CS_Deselect();    /* Deselect nrf24 */
+}
+
+void NRF24_Init(void){
+    /* Setup pins */
+    DIO_InitPin(NRF24_cfg.pins.ce.pin, NRF24_cfg.pins.ce.port, DIO_OUTPUT, DIO_PULLUP_OFF);
+    DIO_InitPin(NRF24_cfg.pins.csn.pin, NRF24_cfg.pins.csn.port, DIO_OUTPUT, DIO_PULLUP_OFF);
+    
+    /* Initialize SPI */
+    SPI_Init();
+
+    /* Disable nrf24 to configure it */
+    NRF24_CE_Disable();
+
+    /* Set nrf24 to power Down mode */
+    NRF24_WriteReg(CONFIG, 0 );
+
+    /* Disable auto ack */
+    NRF24_WriteReg(EN_AA, 0);
+
+    /* Disable all pipes */
+    NRF24_WriteReg(EN_RXADDR, 0);
+
+    /* Set RX/TX address width to 5 bytes */
+    NRF24_WriteReg(SETUP_AW, 0x03);
+
+    /* Disable retransmit */
+    NRF24_WriteReg(SETUP_RETR, 0);
+    
+    /* Set RF channel to default */
+    NRF24_WriteReg(RF_CH, 0);
+
+    /* 2 Mbps, RX gain: 0dbm    */
+    NRF24_WriteReg(RF_SETUP, (1 << RF_DR_HIGH)|(0 << RF_DR_LOW)|((0x03) << RF_PWR0));
+
+    /* Enable nrf24 */
+    NRF24_CE_Enable();
+}
+
+void NRF24_TxMode(void){
+    u8_t configReg = 0;
+
+    /* Disable nrf24 to configure it */
+    NRF24_CE_Disable();
+
+    /* Set nrf24 channel */
+    NRF24_WriteReg(RF_CH, NRF24_cfg.channel);
+
+    /* Set nrf24 TX address */
+    NRF24_WriteRegMulti(TX_ADDR, NRF24_cfg.txAddress, NRF24_cfg.addressWidth);
+
+    /* Set nrf24 in TX mode, and power up */
+    configReg = NRF24_ReadReg(CONFIG);
+    configReg |= (1 << PWR_UP);     /* Power up */
+    configReg &= ~(1 << PRIM_RX);   /* Set to TX mode */
+    NRF24_WriteReg(CONFIG, configReg);
+
+    /* Enable nrf24 */
+    NRF24_CE_Enable();
+}
+
+ERROR_t NRF24_Transmit(u8_t *data, u8_t len){
+    u8_t i = 0;
+    u8_t fifoStatus = 0;
+    ERROR_t error = ERROR_OK;
+
+    /* Select nrf24 */
+    NRF24_CS_Select();
+
+    /* Flush TX FIFO */
+    NRF24_FlushTX();
+
+    /* Write data to TX FIFO */
+    NRF24_WriteRegMulti(W_TX_PAYLOAD, data, len);
+
+    /* Disable nrf24 */
+    NRF24_CS_Deselect();
+
+    /* Wait for TX FIFO to be empty */
+    while(1){
+        /* Select nrf24 */
+        NRF24_CS_Select();
+
+        /* Read FIFO status */
+        fifoStatus = NRF24_ReadReg(FIFO_STATUS);
+
+        /* Deselect nrf24 */
+        NRF24_CS_Deselect();
+
+        /* Check if TX FIFO is empty */
+        if(fifoStatus & (1 << TX_EMPTY)){
+            NRF24_FlushTX();
+            break;
+        }
+    }
+}
+
+void NRF24_RxMode(void){
+    u8_t configReg = 0;
+
+    /* Disable nrf24 to configure it */
+    NRF24_CE_Disable();
+
+    /* Set nrf24 channel */
+    NRF24_WriteReg(RF_CH, NRF24_cfg.channel);
+
+    /* Set nrf24 RX address */
+    switch(NRF24_cfg.rxPipe){
+        case RX_PIPE0:
+            NRF24_WriteRegMulti(RX_ADDR_P0, NRF24_cfg.rx0Address, NRF24_cfg.addressWidth);
+            break;
+        case RX_PIPE1:
+            NRF24_WriteRegMulti(RX_ADDR_P1, NRF24_cfg.rx1Address, NRF24_cfg.addressWidth);
+            break;
+        case RX_PIPE2:
+            NRF24_WriteRegMulti(RX_ADDR_P2, NRF24_cfg.rx2Address, NRF24_cfg.addressWidth);
+            break;
+        case RX_PIPE3:
+            NRF24_WriteRegMulti(RX_ADDR_P3, NRF24_cfg.rx3Address, NRF24_cfg.addressWidth);
+            break;
+        case RX_PIPE4:
+            NRF24_WriteRegMulti(RX_ADDR_P4, NRF24_cfg.rx4Address, NRF24_cfg.addressWidth);
+            break;
+        case RX_PIPE5:
+            NRF24_WriteRegMulti(RX_ADDR_P5, NRF24_cfg.rx5Address, NRF24_cfg.addressWidth);
+            break;
+        default:
+            break;
+    }
+
+    /* Set nrf24 in TX mode, and power up */
+    configReg = NRF24_ReadReg(CONFIG);
+    configReg |= (1 << PWR_UP);     /* Power up */
+    configReg |= (1 << PRIM_RX);    /* Set RX mode */
+    NRF24_WriteReg(CONFIG, configReg);
+
+    /* Enable nrf24 */
+    NRF24_CE_Enable();
+}
+
+void NRF24_powerUpRx(void){
+    NRF24_CS_Select();      /* Select nrf24 */
+    SPI_SendByte(FLUSH_RX);
+    NRF24_CS_Deselect();    /* Deselect nrf24 */
+
+    NRF24_WriteReg(STATUS, (1 << RX_DR) | (1 << TX_DS) | (1 << MAX_RT) ); 
+
+    NRF24_CE_Disable(); 
+    NRF24_WriteReg(CONFIG, ( (1 << EN_CRC) | (0 << CRCO) ) | ( (1 << PWR_UP) | (1 << PRIM_RX) ) );    
+    NRF24_CE_Enable();
+}
+
+/* Set the RX address */
+void NRF24_RxAddress(u8_t * adr) {
+    NRF24_CE_Disable(); 
+    NRF24_WriteString(RX_ADDR_P1, adr,NRF24_cfg.addressWidth);
+    NRF24_CE_Enable(); 
+}
+
+/* Set the TX address */
+void NRF24_TxAddress(u8_t* adr){
+    /* RX_ADDR_P0 must be set to the sending addr for auto ack to work. */
+    
+    NRF24_WriteString(RX_ADDR_P0,adr,NRF24_cfg.addressWidth);
+    NRF24_WriteString(TX_ADDR,adr,NRF24_cfg.addressWidth);
+}
+
+/* Returns the payload length */
+u8_t NRF24_GetPayloadLength(){   
+    return NRF24_cfg.payload_len;
+}
+
+/* Checks if data is available for reading */
+/* Returns 1 if data is ready ... */
+u8_t NRF24_DataReady() {
+    /* See note in getData() function - just checking RX_DR isn't good enough   */
+    u8_t status = 0;
+
+    if(NRF24_Read()){
+        status == 0xff;
+    }
+
+    /* We can short circuit on RX_DR, but if it's not set, we still need        */
+    /* to check the FIFO for any pending packets                                */
+    if( status & (1 << RX_DR) ) {
+        return 1;
+    }
+
+    return !NRF24_rxFifoEmpty();
+}
+
+/* Checks if receive FIFO is empty or not */
+u8_t NRF24_rxFifoEmpty()
+{
+    u8_t fifoStatus;
+
+    NRF24_ReadString(FIFO_STATUS, &fifoStatus, 1);
+    
+    return (fifoStatus & (1 << RX_EMPTY));
+}
+
+/* Returns the length of data waiting in the RX fifo */
+u8_t NRF24_payloadLength(){
+    u8_t status;
+
+    NRF24_CS_Select();
+    SPI_SendByte(R_RX_PL_WID);
+    status = (u8_t)SPI_SendByte(0x00);
+    NRF24_CE_Enable();
+
+    return status;
+}
+
+/* Reads payload bytes into data array */
+void NRF24_getData(u8_t* data) 
+{
+    /* Pull down chip select */
+    NRF24_CS_Select();                               
+
+    /* Send cmd to read rx payload */
+    SPI_SendByte( R_RX_PAYLOAD );
+    
+    /* Read payload */
+    NRF24_TransferString(data,data,NRF24_cfg.payload_len);
+    
+    /* Pull up chip select */
+    NRF24_CE_Enable();
+
+    /* Reset status register */
+    NRF24_WriteReg(STATUS,(1<<RX_DR));   
+}
+
+/* Returns the number of retransmissions occured for the last message */
+u8_t NRF24_retransmissionCount()
+{
+    u8_t rv;
+    NRF24_ReadString(OBSERVE_TX,&rv,1);
+    rv = rv & 0x0F;
+    return rv;
+}
+
+// Sends a data package to the default address. Be sure to send the correct
+// amount of bytes as configured as payload on the receiver.
+void NRF24_send(u8_t* value) 
+{    
+    /* Go to Standby-I first */
+    NRF24_CE_Disable(); 
+     
+    /* Set to transmitter mode , Power up if needed */
+    NRF24_powerUpTx();
+
+    /* Do we really need to flush TX fifo each time ? */
+    #if 1
+        /* Pull down chip select */
+        NRF24_CS_Select();           
+
+        /* Write cmd to flush transmit FIFO */
+        SPI_SendByte(FLUSH_TX);     
+
+        /* Pull up chip select */
+        NRF24_CE_Enable();                    
+    #endif 
+
+    /* Pull down chip select */
+    NRF24_CS_Select();
+
+    /* Write cmd to write payload */
+    SPI_SendByte(W_TX_PAYLOAD);
+
+    /* Write payload */
+    NRF24_SendString(value,NRF24_cfg.payload_len);   
+
+    /* Pull up chip select */
+    NRF24_CE_Enable();
+
+    /* Start the transmission */
+    NRF24_CE_Enable();     
+}
+
+u8_t NRF24_isSending(){
+    u8_t status = 0;
+
+    /* read the current status */
+    if(NRF24_Read()){
+        status = 0xFF;
+    }
+
+    /* if sending successful (TX_DS) or max retries exceded (MAX_RT). */
+    if((status & ((1 << TX_DS)  | (1 << MAX_RT))))
+    {        
+        return 0; /* false */
+    }
+
+    return 1; /* true */
+
+}
+
+u8_t NRF24_Read(){
+    u8_t rv = 0;
+
+    NRF24_CS_Select();
+    if(ERROR_OK == SPI_SendByte(NOP)){
+        rv = 1;
+    }
+
+    NRF24_CE_Enable();
+
+    return rv;
+}
+
+u8_t NRF24_LastMessageStatus(){
+    u8_t rv;
+
+    if(NRF24_Read()){
+        rv = 0xFF;
+    }
+
+    /* Transmission went OK */
+    if((rv & ((1 << TX_DS)))){
+        return 1;
+    }
+    /* Maximum retransmission count is reached */
+    /* Last message probably went missing ... */
+    else if((rv & ((1 << MAX_RT)))){
+        return 0;
+    }  
+    /* Probably still sending ... */
+    else{
+        return 0xFF;
+    }
+}
+
+void NRF24_powerUpTx(){
+    NRF24_WriteReg(STATUS,(1<<RX_DR)|(1<<TX_DS)|(1<<MAX_RT));
+    NRF24_WriteReg(CONFIG,( (1 << EN_CRC) | (0 << CRCO) )|((1<<PWR_UP)|(0<<PRIM_RX)));
+}
+
+void NRF24_powerDown(){
+    NRF24_CE_Disable(); 
+    NRF24_WriteReg(CONFIG,( (1 << EN_CRC) | (0 << CRCO) ));
+}
+
+/* send and receive multiple bytes over SPI */
+void NRF24_TransferString(const u8_t *const dataout, u8_t *const datain, const u8_t len){
+    u8_t i;
+
+    for(i = 0; i < len; i++){
+        SPI_TrancieveByte(dataout[i], &datain[i]);
+    }
+
+}
+
+/* send multiple bytes over SPI */
+void NRF24_SendString(u8_t* dataout,u8_t len){
+    u8_t i;
+    
+    for(i = 0; i < len; i++){
+        SPI_SendByte(dataout[i]);
+    }
+
+}
+
+/* Read single register from nrf24 */
+void NRF24_ReadString(u8_t reg, u8_t* value, u8_t len){
+    NRF24_CS_Select();
+    SPI_SendByte(R_REGISTER | (REGISTER_MASK & reg));
+    NRF24_TransferString(value,value,len);
+    NRF24_CE_Enable();
+}
+
+/* Write to a single register of nrf24 */
+void NRF24_WriteString(u8_t reg, u8_t* value, u8_t len) {
+    NRF24_CS_Select();
+    SPI_SendByte(W_REGISTER | (REGISTER_MASK & reg));
+    NRF24_SendString(value, len);
+    NRF24_CE_Enable();
+}

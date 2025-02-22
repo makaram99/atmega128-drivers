@@ -1,0 +1,12 @@
+CX51 COMPILER V9.60.0.0   _DUMPMACHINE                                                     06/23/2022 08:41:58 PAGE 1   
+
+
+CX51 COMPILER V9.60.0.0, COMPILATION OF MODULE _DUMPMACHINE
+OBJECT MODULE PLACED IN -dumpmachine.OBJ
+COMPILER INVOKED BY: C:\Keil_v5\C51\BIN\CX51.exe -dumpmachine
+
+line level    source
+
+*** ERROR C318 OF -dumpmachine: can't open file '-dumpmachine'
+
+CX51 COMPILATION COMPLETE.  0 WARNING(S),  1 ERROR(S)
